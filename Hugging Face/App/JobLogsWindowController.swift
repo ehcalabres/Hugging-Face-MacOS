@@ -15,6 +15,7 @@ final class JobLogsWindowController: NSObject, NSWindowDelegate {
         jobID: String,
         owner: String,
         title: String,
+        isTerminal: Bool,
         viewModel: DashboardViewModel
     ) {
         if let window = windows[jobID] {
@@ -22,23 +23,24 @@ final class JobLogsWindowController: NSObject, NSWindowDelegate {
             return
         }
 
-        let content = JobLogsView(
+        let content = JobDetailView(
             jobID: jobID,
             owner: owner,
             jobTitle: title,
+            isTerminal: isTerminal,
             dashboardViewModel: viewModel
         )
         let hostingView = NSHostingView(rootView: content)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
 
-        window.title = "Logs — \(title)"
+        window.title = "Job — \(title)"
         window.contentView = hostingView
-        window.minSize = NSSize(width: 520, height: 300)
+        window.minSize = NSSize(width: 660, height: 620)
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier(jobID)
         window.delegate = self

@@ -5,15 +5,24 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/hugging-face-macos.png" alt="Hugging Face for macOS showing Inference Endpoints and usage" width="466">
+  <img src="docs/images/icon.png" alt="Hugging Face for macOS showing Inference Endpoints and usage" width="466">
 </p>
 
 ## Features
 
-- Monitor active and scheduled Jobs, including logs and controls.
+- Monitor complete Job history, including finished and failed Jobs, with state and period filters.
+- Receive native notifications when Jobs and Inference Endpoints change state.
+- Inspect live CPU, memory, network, and GPU metrics alongside live or archived Job logs.
+- Switch to compact dashboard rows that keep only state, name, and actions visible.
 - View Inference Endpoints and their current state.
 - Track billing usage across Jobs, Endpoints, and Inference Providers.
 - Refresh automatically while keeping your Hugging Face token in Keychain.
+
+## Keyboard shortcuts
+
+- `⌘1` Jobs, `⌘2` Endpoints
+- `⌘R` refresh, `⌘N` create/deploy, `⌘O` open on Hugging Face
+- `⌘,` settings, `⌘Q` quit
 
 ## Getting started
 

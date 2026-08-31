@@ -13,7 +13,7 @@ struct HuggingFaceAPIError: Error, LocalizedError {
 }
 
 struct JobsSnapshot: Sendable {
-    let active: [Job]
+    let jobs: [Job]
     let scheduled: [ScheduledJob]
     let namespace: String
 }
@@ -45,14 +45,11 @@ struct HuggingFaceJobsAPI {
             resolvedNamespace = try await currentNamespace()
         }
 
-        async let active = listJobs(
-            namespace: resolvedNamespace,
-            statuses: [.scheduling, .running]
-        )
+        async let jobs = listJobs(namespace: resolvedNamespace)
         async let scheduled = listScheduledJobs(namespace: resolvedNamespace)
 
         return try await JobsSnapshot(
-            active: active,
+            jobs: jobs,
             scheduled: scheduled,
             namespace: resolvedNamespace
         )
@@ -126,22 +123,82 @@ struct HuggingFaceJobsAPI {
         }
     }
 
+    func fetchJobLogs(id: String, owner: String) async throws -> String {
+        var request = try makeRequest(path: ["api", "jobs", owner, id, "logs"])
+        request.timeoutInterval = 60
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+        let data = try await send(request)
+        guard let response = String(data: data, encoding: .utf8) else {
+            throw HuggingFaceAPIError(message: "Hugging Face returned unreadable Job logs.")
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            response.components(separatedBy: .newlines).compactMap { line in
+                guard !line.isEmpty, line != "event: log", line != ": keep-alive" else { return nil }
+                guard line.hasPrefix("data: ") else { return line }
+
+                let payload = String(line.dropFirst("data: ".count))
+                guard let eventData = payload.data(using: .utf8),
+                      let event = try? JSONSerialization.jsonObject(with: eventData) as? [String: Any],
+                      let message = event["data"] as? String,
+                      !message.hasPrefix("===== Job started") else {
+                    return nil
+                }
+                return message
+            }
+            .joined(separator: "\n")
+        }.value
+    }
+
+    func streamJobMetrics(id: String, owner: String) -> AsyncThrowingStream<JobMetrics, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = try makeRequest(path: ["api", "jobs", owner, id, "metrics"])
+                    request.timeoutInterval = 60 * 60
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw HuggingFaceAPIError(message: "Hugging Face returned an invalid metrics stream.")
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw HuggingFaceAPIError(message: "Hugging Face returned error \(http.statusCode) for the metrics stream.")
+                    }
+
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        guard line.hasPrefix("data: ") else { continue }
+                        let payload = String(line.dropFirst("data: ".count))
+                        guard let data = payload.data(using: .utf8),
+                              let metrics = try? JSONDecoder().decode(JobMetrics.self, from: data) else {
+                            continue
+                        }
+                        continuation.yield(metrics)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     private func currentNamespace() async throws -> String {
         let request = try makeRequest(path: ["api", "whoami-v2"])
         let data = try await send(request)
         return try JSONDecoder().decode(UserIdentity.self, from: data).name
     }
 
-    private func listJobs(
-        namespace: String,
-        statuses: [Job.Status]
-    ) async throws -> [Job] {
-        let query = statuses.map {
-            URLQueryItem(name: "stage", value: $0.rawValue)
-        }
+    private func listJobs(namespace: String) async throws -> [Job] {
         var request = try makeRequest(
-            path: ["api", "jobs", namespace],
-            query: query
+            path: ["api", "jobs", namespace]
         )
         var jobs: [Job] = []
 

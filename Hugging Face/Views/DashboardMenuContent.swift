@@ -11,6 +11,7 @@ import SwiftUI
 struct DashboardMenuContent: View {
     @EnvironmentObject private var vm: DashboardViewModel
     @State private var selectedTab: DashboardTab = .jobs
+    @State private var showsAllJobs = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,7 +69,7 @@ struct DashboardMenuContent: View {
             }
             .buttonStyle(.borderless)
             .help("Refresh Jobs, Endpoints, and usage")
-            .keyboardShortcut("r")
+            .keyboardShortcut("r", modifiers: .command)
             .disabled(isRefreshing)
 
             Button {
@@ -79,6 +80,7 @@ struct DashboardMenuContent: View {
             }
             .buttonStyle(.borderless)
             .help(selectedTab == .jobs ? "Create a Job on Hugging Face" : "Deploy Endpoint on Hugging Face")
+            .keyboardShortcut("n", modifiers: .command)
 
         }
     }
@@ -87,7 +89,7 @@ struct DashboardMenuContent: View {
         guard selectedTab == .jobs else {
             return vm.endpoints.count == 1 ? "1 endpoint" : "\(vm.endpoints.count) endpoints"
         }
-        let active = vm.running.count == 1 ? "1 active job" : "\(vm.running.count) active jobs"
+        let active = vm.jobs.count == 1 ? "1 job" : "\(vm.jobs.count) jobs"
         let schedules = vm.scheduled.count == 1 ? "1 schedule" : "\(vm.scheduled.count) schedules"
         return "\(active) · \(schedules)"
     }
@@ -166,27 +168,74 @@ struct DashboardMenuContent: View {
     }
 
     private var activeJobsSection: some View {
-        JobSection(title: "Active Jobs", count: vm.running.count) {
-            if vm.running.isEmpty {
+        JobSection(title: "Jobs", count: vm.filteredJobs.count) {
+            jobFilters
+
+            if vm.filteredJobs.isEmpty {
                 EmptyJobsView(
-                    title: "No active jobs",
-                    message: "Queued and running jobs will appear here."
+                    title: "No matching jobs",
+                    message: "Try a different state or time period."
                 )
             } else {
                 LazyVStack(spacing: 7) {
-                    ForEach(vm.running.prefix(vm.displayLimit)) { job in
+                    ForEach(vm.filteredJobs.prefix(showsAllJobs ? vm.filteredJobs.count : vm.displayLimit)) { job in
                         JobRow(job: job)
                     }
                 }
 
-                if vm.running.count > vm.displayLimit {
-                    ShowMoreButton(
-                        hiddenCount: vm.running.count - vm.displayLimit,
-                        destination: vm.jobsPageURL
-                    )
+                if vm.filteredJobs.count > vm.displayLimit {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            showsAllJobs.toggle()
+                        }
+                    } label: {
+                        HStack {
+                            Text(showsAllJobs ? "Show fewer" : "Show \(vm.filteredJobs.count - vm.displayLimit) more")
+                            Spacer()
+                            Image(systemName: showsAllJobs ? "chevron.up" : "chevron.down")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }
+    }
+
+    private var jobFilters: some View {
+        HStack(spacing: 8) {
+            Picker("State", selection: $vm.jobStateFilter) {
+                ForEach(JobStateFilter.allCases) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .labelsHidden()
+
+            Picker("Period", selection: $vm.jobPeriodFilter) {
+                ForEach(JobPeriodFilter.allCases) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .labelsHidden()
+
+            Spacer()
+
+            if vm.jobStateFilter != .all || vm.jobPeriodFilter != .all {
+                Button("Clear") {
+                    vm.jobStateFilter = .all
+                    vm.jobPeriodFilter = .all
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .controlSize(.small)
     }
 
     private var scheduledJobsSection: some View {
@@ -245,6 +294,7 @@ struct DashboardMenuContent: View {
             }
             .buttonStyle(.borderless)
             .help(selectedTab == .jobs ? "Open Hugging Face Jobs" : "Open Inference Endpoints")
+            .keyboardShortcut("o", modifiers: .command)
 
             Button {
                 SettingsWindowController.shared.show(viewModel: vm)
@@ -253,6 +303,7 @@ struct DashboardMenuContent: View {
             }
             .buttonStyle(.borderless)
             .help("Settings")
+            .keyboardShortcut(",", modifiers: .command)
 
             Button {
                 NSApplication.shared.terminate(nil)
@@ -261,6 +312,7 @@ struct DashboardMenuContent: View {
             }
             .buttonStyle(.borderless)
             .help("Quit Hugging Face")
+            .keyboardShortcut("q", modifiers: .command)
         }
     }
 
@@ -283,6 +335,13 @@ private enum DashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .jobs: "briefcase"
         case .endpoints: "point.3.connected.trianglepath.dotted"
+        }
+    }
+
+    var shortcut: KeyEquivalent {
+        switch self {
+        case .jobs: "1"
+        case .endpoints: "2"
         }
     }
 }
@@ -430,6 +489,7 @@ private struct DashboardSwitch: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut(tab.shortcut, modifiers: .command)
                 .accessibilityAddTraits(selection == tab ? .isSelected : [])
             }
         }
@@ -588,6 +648,7 @@ private struct ExpandableCard<Content: View>: View {
 
 private struct JobRow: View {
     @EnvironmentObject private var vm: DashboardViewModel
+    @AppStorage(HuggingFacePreferences.compactDashboardKey) private var compactDashboard = false
     @State private var showsDetails = false
 
     let job: Job
@@ -595,8 +656,27 @@ private struct JobRow: View {
     var body: some View {
         ExpandableCard(
             isExpanded: showsDetails,
-            toggle: { withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() } }
+            toggle: {
+                withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() }
+            }
         ) {
+            if compactDashboard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        StatusIcon(status: job.status)
+                        Text(job.displayName)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        jobActions
+                    }
+
+                    if showsDetails {
+                        Divider().padding(.vertical, 9)
+                        JobDetails(job: job)
+                    }
+                }
+            } else {
             VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
                 StatusIcon(status: job.status)
@@ -630,28 +710,7 @@ private struct JobRow: View {
 
                 Spacer(minLength: 2)
 
-                HStack(spacing: 2) {
-                    RowActionButton(
-                        systemName: "stop.circle",
-                        help: "Cancel Job",
-                        tint: .red
-                    ) {
-                        Task { await vm.cancel(job) }
-                    }
-
-                    RowActionButton(
-                        systemName: "terminal",
-                        help: "Stream Logs"
-                    ) {
-                        JobLogsWindowController.shared.show(
-                            jobID: job.id,
-                            owner: job.owner.name,
-                            title: job.displayName,
-                            viewModel: vm
-                        )
-                    }
-
-                }
+                jobActions
             }
 
             if showsDetails {
@@ -661,13 +720,42 @@ private struct JobRow: View {
                 JobDetails(job: job)
             }
             }
+            }
         }
         .help(job.statusMessage ?? job.id)
+    }
+
+    private var jobActions: some View {
+        HStack(spacing: 2) {
+            if job.status.isActive {
+                RowActionButton(
+                    systemName: "stop.circle",
+                    help: "Cancel Job",
+                    tint: .red
+                ) {
+                    Task { await vm.cancel(job) }
+                }
+            }
+
+            RowActionButton(
+                systemName: "terminal",
+                help: job.status.isActive ? "Job Metrics and Logs" : "View Saved Logs"
+            ) {
+                JobLogsWindowController.shared.show(
+                    jobID: job.id,
+                    owner: job.owner.name,
+                    title: job.displayName,
+                    isTerminal: !job.status.isActive,
+                    viewModel: vm
+                )
+            }
+        }
     }
 }
 
 private struct ScheduledJobRow: View {
     @EnvironmentObject private var vm: DashboardViewModel
+    @AppStorage(HuggingFacePreferences.compactDashboardKey) private var compactDashboard = false
     @State private var showsDetails = false
 
     let job: ScheduledJob
@@ -680,8 +768,27 @@ private struct ScheduledJobRow: View {
     var body: some View {
         ExpandableCard(
             isExpanded: showsDetails,
-            toggle: { withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() } }
+            toggle: {
+                withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() }
+            }
         ) {
+            if compactDashboard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        ScheduleStatusIcon(isSuspended: job.isSuspended, isRunning: activeRun != nil)
+                        Text(job.displayName)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        scheduleActions
+                    }
+
+                    if showsDetails {
+                        Divider().padding(.vertical, 9)
+                        ScheduledJobDetails(job: job, jobsPageURL: vm.jobsPageURL)
+                    }
+                }
+            } else {
             VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
                 ScheduleStatusIcon(isSuspended: job.isSuspended, isRunning: activeRun != nil)
@@ -711,39 +818,7 @@ private struct ScheduledJobRow: View {
 
                 Spacer(minLength: 2)
 
-                HStack(spacing: 2) {
-                    if let activeRun {
-                        RowActionButton(
-                            systemName: "stop.circle",
-                            help: "Cancel Current Run",
-                            tint: .red
-                        ) {
-                            Task { await vm.cancel(activeRun) }
-                        }
-                    }
-
-                    RowActionButton(
-                        systemName: job.isSuspended ? "play.circle" : "pause.circle",
-                        help: job.isSuspended ? "Resume Schedule" : "Suspend Schedule"
-                    ) {
-                        Task { await vm.setSuspended(!job.isSuspended, for: job) }
-                    }
-
-                    RowActionButton(
-                        systemName: "terminal",
-                        help: job.status.lastJob == nil ? "No runs yet" : "Stream Latest Run Logs",
-                        isDisabled: job.status.lastJob == nil
-                    ) {
-                        guard let lastJob = job.status.lastJob else { return }
-                        JobLogsWindowController.shared.show(
-                            jobID: lastJob.id,
-                            owner: job.owner.name,
-                            title: job.displayName,
-                            viewModel: vm
-                        )
-                    }
-
-                }
+                scheduleActions
             }
 
             if showsDetails {
@@ -753,12 +828,50 @@ private struct ScheduledJobRow: View {
                 ScheduledJobDetails(job: job, jobsPageURL: vm.jobsPageURL)
             }
             }
+            }
+        }
+    }
+
+    private var scheduleActions: some View {
+        HStack(spacing: 2) {
+            if let activeRun {
+                RowActionButton(
+                    systemName: "stop.circle",
+                    help: "Cancel Current Run",
+                    tint: .red
+                ) {
+                    Task { await vm.cancel(activeRun) }
+                }
+            }
+
+            RowActionButton(
+                systemName: job.isSuspended ? "play.circle" : "pause.circle",
+                help: job.isSuspended ? "Resume Schedule" : "Suspend Schedule"
+            ) {
+                Task { await vm.setSuspended(!job.isSuspended, for: job) }
+            }
+
+            RowActionButton(
+                systemName: "terminal",
+                help: job.status.lastJob == nil ? "No runs yet" : "View Latest Run Logs",
+                isDisabled: job.status.lastJob == nil
+            ) {
+                guard let lastJob = job.status.lastJob else { return }
+                JobLogsWindowController.shared.show(
+                    jobID: lastJob.id,
+                    owner: job.owner.name,
+                    title: job.displayName,
+                    isTerminal: !(vm.jobs.first { $0.id == lastJob.id }?.status.isActive ?? false),
+                    viewModel: vm
+                )
+            }
         }
     }
 }
 
 private struct EndpointRow: View {
     @EnvironmentObject private var vm: DashboardViewModel
+    @AppStorage(HuggingFacePreferences.compactDashboardKey) private var compactDashboard = false
     @State private var showsDetails = false
 
     let endpoint: InferenceEndpoint
@@ -766,8 +879,31 @@ private struct EndpointRow: View {
     var body: some View {
         ExpandableCard(
             isExpanded: showsDetails,
-            toggle: { withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() } }
+            toggle: {
+                withAnimation(.easeInOut(duration: 0.16)) { showsDetails.toggle() }
+            }
         ) {
+            if compactDashboard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        EndpointStatusIcon(status: endpoint.status)
+                        Text(endpoint.name)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        endpointActions
+                    }
+
+                    if showsDetails {
+                        Divider().padding(.vertical, 9)
+                        EndpointDetails(
+                            endpoint: endpoint,
+                            namespace: vm.endpointsNamespace,
+                            configurationURL: vm.endpointConfigurationURL(for: endpoint)
+                        )
+                    }
+                }
+            } else {
             VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
                 EndpointStatusIcon(status: endpoint.status)
@@ -797,29 +933,7 @@ private struct EndpointRow: View {
 
                 Spacer(minLength: 2)
 
-                HStack(spacing: 2) {
-                    endpointLifecycleAction
-
-                    if endpoint.isRunning {
-                        RowActionButton(
-                            systemName: "arrow.down.to.line.compact",
-                            help: "Scale to Zero"
-                        ) {
-                            Task { await vm.scaleToZero(endpoint) }
-                        }
-                    }
-
-                    RowActionButton(
-                        systemName: "doc.on.doc",
-                        help: endpoint.status.url == nil ? "Endpoint URL unavailable" : "Copy Endpoint URL",
-                        isDisabled: endpoint.status.url == nil
-                    ) {
-                        guard let url = endpoint.status.url else { return }
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                    }
-
-                }
+                endpointActions
             }
 
             if showsDetails {
@@ -833,8 +947,34 @@ private struct EndpointRow: View {
                 )
             }
             }
+            }
         }
         .help(endpoint.status.message ?? endpoint.name)
+    }
+
+    private var endpointActions: some View {
+        HStack(spacing: 2) {
+            endpointLifecycleAction
+
+            if endpoint.isRunning {
+                RowActionButton(
+                    systemName: "arrow.down.to.line.compact",
+                    help: "Scale to Zero"
+                ) {
+                    Task { await vm.scaleToZero(endpoint) }
+                }
+            }
+
+            RowActionButton(
+                systemName: "doc.on.doc",
+                help: endpoint.status.url == nil ? "Endpoint URL unavailable" : "Copy Endpoint URL",
+                isDisabled: endpoint.status.url == nil
+            ) {
+                guard let url = endpoint.status.url else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            }
+        }
     }
 
     @ViewBuilder
@@ -885,6 +1025,9 @@ private struct JobDetails: View {
             DetailLine(label: "Created", value: job.createdAt.detailText)
             if let startedAt = job.startedAt {
                 DetailLine(label: "Started", value: startedAt.detailText)
+            }
+            if let finishedAt = job.finishedAt {
+                DetailLine(label: "Finished", value: finishedAt.detailText)
             }
             DetailLine(label: "Command", value: job.detail)
 

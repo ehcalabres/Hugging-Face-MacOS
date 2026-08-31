@@ -8,8 +8,47 @@
 import Combine
 import Foundation
 
+enum JobStateFilter: String, CaseIterable, Identifiable {
+    case all = "All states"
+    case active = "Active"
+    case completed = "Finished"
+    case failed = "Failed"
+    case canceled = "Canceled"
+
+    var id: Self { self }
+
+    func includes(_ status: Job.Status) -> Bool {
+        switch self {
+        case .all: true
+        case .active: status.isActive
+        case .completed: status == .completed
+        case .failed: status == .error
+        case .canceled: status == .canceled || status == .deleted
+        }
+    }
+}
+
+enum JobPeriodFilter: String, CaseIterable, Identifiable {
+    case all = "All time"
+    case day = "24 hours"
+    case week = "7 days"
+    case month = "30 days"
+
+    var id: Self { self }
+
+    var interval: TimeInterval? {
+        switch self {
+        case .all: nil
+        case .day: 24 * 60 * 60
+        case .week: 7 * 24 * 60 * 60
+        case .month: 30 * 24 * 60 * 60
+        }
+    }
+}
+
 @MainActor
 final class DashboardViewModel: ObservableObject {
+    @Published private(set) var jobs: [Job] = []
     @Published private(set) var running: [Job] = []
     @Published private(set) var scheduled: [ScheduledJob] = []
     @Published private(set) var endpoints: [InferenceEndpoint] = []
@@ -27,6 +66,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var lastEndpointsUpdated: Date?
     @Published private(set) var lastUsageUpdated: Date?
     @Published private(set) var nextRefreshDate: Date?
+    @Published var jobStateFilter: JobStateFilter = .all
+    @Published var jobPeriodFilter: JobPeriodFilter = .all
 
     @Published var displayLimit: Int {
         didSet { UserDefaults.standard.set(displayLimit, forKey: Self.displayLimitKey) }
@@ -52,11 +93,14 @@ final class DashboardViewModel: ObservableObject {
     private let jobsAPI: HuggingFaceJobsAPI
     private let endpointsAPI: HuggingFaceEndpointsAPI
     private let billingAPI: HuggingFaceBillingAPI
+    private var hasLoadedJobs = false
+    private var hasLoadedEndpoints = false
 
     init(jobsAPI: HuggingFaceJobsAPI, endpointsAPI: HuggingFaceEndpointsAPI, billingAPI: HuggingFaceBillingAPI) {
         self.jobsAPI = jobsAPI
         self.endpointsAPI = endpointsAPI
         self.billingAPI = billingAPI
+        _ = NotificationService.shared
 
         let savedLimit = UserDefaults.standard.integer(forKey: Self.displayLimitKey)
         let legacyLimit = UserDefaults.standard.integer(forKey: Self.legacyRecentLimitKey)
@@ -122,7 +166,12 @@ final class DashboardViewModel: ObservableObject {
         do {
             let snapshot = try await jobsAPI.fetchSnapshot()
             let namespaceChanged = namespace != snapshot.namespace
-            running = snapshot.active.sorted { $0.createdAt > $1.createdAt }
+            let sortedJobs = snapshot.jobs.sorted { $0.createdAt > $1.createdAt }
+            if hasLoadedJobs, !namespaceChanged {
+                notifyJobTransitions(from: jobs, to: sortedJobs)
+            }
+            jobs = sortedJobs
+            running = sortedJobs.filter(\.status.isActive)
             scheduled = snapshot.scheduled.sorted {
                 if $0.isSuspended != $1.isSuspended {
                     return !$0.isSuspended
@@ -130,11 +179,13 @@ final class DashboardViewModel: ObservableObject {
                 return $0.createdAt > $1.createdAt
             }
             namespace = snapshot.namespace
+            hasLoadedJobs = true
             if namespaceChanged {
                 endpoints = []
                 endpointsNamespace = ""
                 endpointsErrorMessage = nil
                 lastEndpointsUpdated = nil
+                hasLoadedEndpoints = false
             }
             lastUpdated = Date()
             errorMessage = nil
@@ -176,16 +227,22 @@ final class DashboardViewModel: ObservableObject {
 
         do {
             let snapshot = try await endpointsAPI.fetchEndpoints()
-            endpoints = snapshot.endpoints.sorted {
+            let sortedEndpoints = snapshot.endpoints.sorted {
                 if $0.isRunning != $1.isRunning {
                     return $0.isRunning
                 }
                 return $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
+            let namespaceChanged = endpointsNamespace != snapshot.namespace
+            if hasLoadedEndpoints, !namespaceChanged {
+                notifyEndpointTransitions(from: endpoints, to: sortedEndpoints)
+            }
+            endpoints = sortedEndpoints
             endpointsNamespace = snapshot.namespace
             accountUsername = snapshot.username
             lastEndpointsUpdated = Date()
             endpointsErrorMessage = nil
+            hasLoadedEndpoints = true
             return true
         } catch {
             endpointsErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -243,6 +300,22 @@ final class DashboardViewModel: ObservableObject {
         jobsAPI.streamJobLogs(id: jobID, owner: owner)
     }
 
+    func archivedLogs(jobID: String, owner: String) async throws -> String {
+        try await jobsAPI.fetchJobLogs(id: jobID, owner: owner)
+    }
+
+    func metrics(jobID: String, owner: String) -> AsyncThrowingStream<JobMetrics, Error> {
+        jobsAPI.streamJobMetrics(id: jobID, owner: owner)
+    }
+
+    var filteredJobs: [Job] {
+        jobs.filter { job in
+            guard jobStateFilter.includes(job.status) else { return false }
+            guard let interval = jobPeriodFilter.interval else { return true }
+            return job.createdAt >= Date().addingTimeInterval(-interval)
+        }
+    }
+
     var jobsPageURL: URL {
         let url = URL(string: "https://huggingface.co/settings/jobs")!
         return url
@@ -289,6 +362,29 @@ final class DashboardViewModel: ObservableObject {
             _ = await refreshEndpoints()
         } catch {
             endpointsErrorMessage = "Could not \(action) \(endpoint.name): \(error.localizedDescription)"
+        }
+    }
+
+    private func notifyJobTransitions(from oldJobs: [Job], to newJobs: [Job]) {
+        let oldByID = Dictionary(uniqueKeysWithValues: oldJobs.map { ($0.id, $0) })
+        for job in newJobs {
+            let previous = oldByID[job.id]
+            if previous?.status != job.status {
+                NotificationService.shared.notifyJobTransition(from: previous, to: job)
+            }
+        }
+    }
+
+    private func notifyEndpointTransitions(
+        from oldEndpoints: [InferenceEndpoint],
+        to newEndpoints: [InferenceEndpoint]
+    ) {
+        let oldByID = Dictionary(uniqueKeysWithValues: oldEndpoints.map { ($0.id, $0) })
+        for endpoint in newEndpoints {
+            let previous = oldByID[endpoint.id]
+            if previous?.status.state != endpoint.status.state {
+                NotificationService.shared.notifyEndpointTransition(from: previous, to: endpoint)
+            }
         }
     }
 }

@@ -15,19 +15,21 @@ private struct SettingRow<Control: View>: View {
     @ViewBuilder let control: () -> Control
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
+        HStack(alignment: .center, spacing: 24) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                 Text(description)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-
-            Spacer(minLength: 24)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             control()
                 .controlSize(.small)
+                .frame(width: 220, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
     }
 }
 
@@ -35,6 +37,8 @@ struct PreferencesView: View {
     @EnvironmentObject private var vm: DashboardViewModel
     @AppStorage(HuggingFacePreferences.namespaceKey) private var namespace = ""
     @AppStorage(HuggingFacePreferences.showActiveCountKey) private var showActiveCount = true
+    @AppStorage(HuggingFacePreferences.notificationsEnabledKey) private var notificationsEnabled = true
+    @AppStorage(HuggingFacePreferences.compactDashboardKey) private var compactDashboard = false
 
     @State private var token = KeychainService.loadToken() ?? ""
     @State private var poll: Double = 30
@@ -181,8 +185,8 @@ struct PreferencesView: View {
                 }
 
                 SettingRow(
-                    title: "Jobs per section",
-                    description: "Maximum number of jobs shown before the Show More link."
+                    title: "Items per section",
+                    description: "Number of Jobs, schedules, and Endpoints shown before the Show More control."
                 ) {
                     Picker("", selection: $jobsPerSection) {
                         ForEach(displayLimitOptions, id: \.self) { value in
@@ -202,6 +206,28 @@ struct PreferencesView: View {
                 ) {
                     Toggle("", isOn: $showActiveCount)
                         .labelsHidden()
+                }
+
+                SettingRow(
+                    title: "Compact dashboard",
+                    description: "Show only state, name, and actions for Jobs, schedules, and Endpoints."
+                ) {
+                    Toggle("", isOn: $compactDashboard)
+                        .labelsHidden()
+                }
+
+                SettingRow(
+                    title: "State change notifications",
+                    description: "Notify when Jobs and Endpoints start, stop, finish, fail, or scale to zero."
+                ) {
+                    Toggle("", isOn: $notificationsEnabled)
+                        .labelsHidden()
+                        .onChange(of: notificationsEnabled) { _, enabled in
+                            HuggingFacePreferences.notificationsEnabled = enabled
+                            if enabled {
+                                NotificationService.shared.requestAuthorization()
+                            }
+                        }
                 }
             }
 

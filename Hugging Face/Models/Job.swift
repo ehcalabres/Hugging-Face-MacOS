@@ -116,6 +116,83 @@ struct Job: Decodable, Identifiable, Equatable, Sendable {
     }
 }
 
+struct JobMetrics: Decodable, Equatable, Sendable {
+    struct GPU: Equatable, Sendable, Identifiable {
+        let name: String
+        let utilization: Double?
+        let memoryUtilization: Double?
+        let memoryUsedBytes: Int64?
+        let memoryTotalBytes: Int64?
+        let temperature: Double?
+
+        var id: String { name }
+
+        fileprivate init(name: String, payload: GPUPayload) {
+            self.name = name
+            utilization = payload.utilization
+            memoryUtilization = payload.memoryUtilization
+            memoryUsedBytes = payload.memoryUsedBytes
+            memoryTotalBytes = payload.memoryTotalBytes
+            temperature = payload.temperature
+        }
+    }
+
+    fileprivate struct GPUPayload: Decodable, Equatable, Sendable {
+        let utilization: Double?
+        let memoryUtilization: Double?
+        let memoryUsedBytes: Int64?
+        let memoryTotalBytes: Int64?
+        let temperature: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case utilization = "gpu_utilization"
+            case memoryUtilization = "memory_utilization"
+            case memoryUsedBytes = "memory_used_bytes"
+            case memoryTotalBytes = "memory_total_bytes"
+            case temperature
+        }
+    }
+
+    let cpuUsagePercent: Double
+    let cpuMillicores: Int
+    let memoryUsedBytes: Int64
+    let memoryTotalBytes: Int64
+    let receivedBytesPerSecond: Int64
+    let transmittedBytesPerSecond: Int64
+    let replica: String
+    let gpus: [GPU]
+
+    var memoryUsagePercent: Double {
+        guard memoryTotalBytes > 0 else { return 0 }
+        return Double(memoryUsedBytes) / Double(memoryTotalBytes) * 100
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cpuUsagePercent = "cpu_usage_pct"
+        case cpuMillicores = "cpu_millicores"
+        case memoryUsedBytes = "memory_used_bytes"
+        case memoryTotalBytes = "memory_total_bytes"
+        case receivedBytesPerSecond = "rx_bps"
+        case transmittedBytesPerSecond = "tx_bps"
+        case replica
+        case gpus
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cpuUsagePercent = try container.decode(Double.self, forKey: .cpuUsagePercent)
+        cpuMillicores = try container.decode(Int.self, forKey: .cpuMillicores)
+        memoryUsedBytes = try container.decode(Int64.self, forKey: .memoryUsedBytes)
+        memoryTotalBytes = try container.decode(Int64.self, forKey: .memoryTotalBytes)
+        receivedBytesPerSecond = try container.decode(Int64.self, forKey: .receivedBytesPerSecond)
+        transmittedBytesPerSecond = try container.decode(Int64.self, forKey: .transmittedBytesPerSecond)
+        replica = try container.decode(String.self, forKey: .replica)
+        let payloads = try container.decodeIfPresent([String: GPUPayload].self, forKey: .gpus) ?? [:]
+        gpus = payloads.map { GPU(name: $0.key, payload: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+}
+
 struct ScheduledJob: Decodable, Identifiable, Equatable, Sendable {
     struct JobSpec: Decodable, Equatable, Sendable {
         let dockerImage: String?

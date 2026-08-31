@@ -16,12 +16,16 @@ private final class JobLogsViewModel: ObservableObject {
 
     private let jobID: String
     private let owner: String
+    private let isTerminal: Bool
     private let dashboardViewModel: DashboardViewModel
     private var task: Task<Void, Never>?
+    private var flushTask: Task<Void, Never>?
+    private var bufferedOutput = ""
 
-    init(jobID: String, owner: String, dashboardViewModel: DashboardViewModel) {
+    init(jobID: String, owner: String, isTerminal: Bool, dashboardViewModel: DashboardViewModel) {
         self.jobID = jobID
         self.owner = owner
+        self.isTerminal = isTerminal
         self.dashboardViewModel = dashboardViewModel
     }
 
@@ -33,11 +37,18 @@ private final class JobLogsViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                for try await message in dashboardViewModel.logs(jobID: jobID, owner: owner) {
+                if isTerminal {
+                    let archivedOutput = try await dashboardViewModel.archivedLogs(jobID: jobID, owner: owner)
                     guard !Task.isCancelled else { return }
-                    append(message)
+                    replaceOutput(with: archivedOutput)
+                } else {
+                    for try await message in dashboardViewModel.logs(jobID: jobID, owner: owner) {
+                        guard !Task.isCancelled else { return }
+                        append(message)
+                    }
                 }
                 if !Task.isCancelled {
+                    flushOutput()
                     state = .finished
                 }
             } catch {
@@ -51,49 +62,71 @@ private final class JobLogsViewModel: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
+        flushTask?.cancel()
+        flushTask = nil
     }
 
     func clear() {
+        bufferedOutput = ""
         output = ""
     }
 
     private func append(_ message: String) {
-        if !output.isEmpty && !output.hasSuffix("\n") {
-            output.append("\n")
+        if !bufferedOutput.isEmpty && !bufferedOutput.hasSuffix("\n") {
+            bufferedOutput.append("\n")
         }
-        output.append(message)
+        bufferedOutput.append(message)
         if !message.hasSuffix("\n") {
-            output.append("\n")
+            bufferedOutput.append("\n")
         }
 
-        let maximumCharacters = 2_000_000
-        if output.count > maximumCharacters {
-            output.removeFirst(output.count - maximumCharacters)
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled, let self else { return }
+            self.flushOutput()
+            self.flushTask = nil
         }
+    }
+
+    private func replaceOutput(with text: String) {
+        bufferedOutput = text
+        flushOutput()
+    }
+
+    private func flushOutput() {
+        let maximumCharacters = 2_000_000
+        if bufferedOutput.count > maximumCharacters {
+            bufferedOutput = String(bufferedOutput.suffix(maximumCharacters))
+        }
+        output = bufferedOutput
     }
 }
 
 struct JobLogsView: View {
     @StateObject private var model: JobLogsViewModel
-    @State private var isFollowingLogs = true
 
     private let jobID: String
     private let owner: String
     private let jobTitle: String
+    private let isTerminal: Bool
 
     init(
         jobID: String,
         owner: String,
         jobTitle: String,
+        isTerminal: Bool,
         dashboardViewModel: DashboardViewModel
     ) {
         self.jobID = jobID
         self.owner = owner
         self.jobTitle = jobTitle
+        self.isTerminal = isTerminal
         _model = StateObject(
             wrappedValue: JobLogsViewModel(
                 jobID: jobID,
                 owner: owner,
+                isTerminal: isTerminal,
                 dashboardViewModel: dashboardViewModel
             )
         )
@@ -107,42 +140,11 @@ struct JobLogsView: View {
 
             Divider()
 
-            GeometryReader { viewport in
-                ScrollViewReader { proxy in
-                    ScrollView([.horizontal, .vertical]) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(model.output.isEmpty ? emptyMessage : model.output)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(model.output.isEmpty ? .secondary : .primary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: true, vertical: true)
-
-                            Spacer(minLength: 0)
-
-                            Color.clear
-                                .frame(height: 1)
-                                .id("bottom")
-                        }
-                        .frame(
-                            minWidth: max(0, viewport.size.width - 24),
-                            minHeight: max(0, viewport.size.height - 24),
-                            alignment: .topLeading
-                        )
-                        .padding(12)
-                    }
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .onScrollGeometryChange(for: Bool.self, of: { geometry in
-                        geometry.contentOffset.y + geometry.containerSize.height
-                            >= geometry.contentSize.height - 2
-                    }, action: { _, isAtBottom in
-                        isFollowingLogs = isAtBottom
-                    })
-                    .onChange(of: model.output) {
-                        guard isFollowingLogs else { return }
-                        proxy.scrollTo("bottom", anchor: .bottomLeading)
-                    }
-                }
-            }
+            LogTextView(
+                text: model.output.isEmpty ? emptyMessage : model.output,
+                isPlaceholder: model.output.isEmpty,
+                followsTail: !isTerminal
+            )
 
             Divider()
 
@@ -162,7 +164,7 @@ struct JobLogsView: View {
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(jobTitle)
+                Text("Logs")
                     .font(.headline)
                     .lineLimit(1)
                 Text(stateText)
@@ -221,8 +223,8 @@ struct JobLogsView: View {
     private var stateText: String {
         switch model.state {
         case .waiting: "Connecting…"
-        case .streaming: "Streaming live output"
-        case .finished: "Stream finished"
+        case .streaming: isTerminal ? "Loading saved output" : "Streaming live output"
+        case .finished: isTerminal ? "Saved output loaded" : "Stream finished"
         case .failed: "Stream failed"
         }
     }
@@ -241,5 +243,57 @@ struct JobLogsView: View {
             .appending(path: "jobs")
             .appending(path: owner)
             .appending(path: jobID)
+    }
+}
+
+private struct LogTextView: NSViewRepresentable {
+    let text: String
+    let isPlaceholder: Bool
+    let followsTail: Bool
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .textBackgroundColor
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.drawsBackground = true
+        textView.backgroundColor = .textBackgroundColor
+        textView.textColor = .labelColor
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.textContainerInset = NSSize(width: 12, height: 10)
+        textView.frame = scrollView.contentView.bounds
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        textView.textColor = isPlaceholder ? .secondaryLabelColor : .labelColor
+        guard textView.string != text else { return }
+
+        let wasAtTop = scrollView.contentView.bounds.minY <= 1
+        textView.string = text
+        if followsTail {
+            textView.scrollRangeToVisible(NSRange(location: textView.string.utf16.count, length: 0))
+        } else if wasAtTop {
+            textView.scrollToBeginningOfDocument(nil)
+        }
     }
 }

@@ -1,11 +1,11 @@
+<p align="center">
+  <img src="docs/images/icon.png" alt="Hugging Face for macOS app icon" width="144">
+</p>
+
 <h1 align="center">Hugging Face for macOS</h1>
 
 <p align="center">
   A native menu bar companion for keeping an eye on Hugging Face Jobs, Inference Endpoints, and usage.
-</p>
-
-<p align="center">
-  <img src="docs/images/icon.png" alt="Hugging Face for macOS showing Inference Endpoints and usage" width="466">
 </p>
 
 ## Features

@@ -91,19 +91,13 @@ struct HuggingFaceIconView: View {
     }
 }
 
-//struct HuggingFaceIconView: View {
-//    let size: CGFloat
-//
-//    var body: some View {
-//        Image("HFIcon")
-//            .resizable()
-//            .aspectRatio(contentMode: .fit)
-//            .frame(
-//                width: size,
-//                height: size,
-//                alignment: .center
-//            )
-//            .clipped()
-//            .fixedSize()
-//    }
-//}
+struct HuggingFaceHeaderIconView: View {
+    var body: some View {
+        Image("HFHeaderIcon")
+            .renderingMode(.original)
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: 30, height: 30)
+    }
+}

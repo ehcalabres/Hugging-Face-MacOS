@@ -1,11 +1,12 @@
 {
   "images" : [
     {
-      "filename" : "hf-logo-glass.png",
+      "filename" : "hf-header-icon.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
+      "filename" : "hf-header-icon@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
     },

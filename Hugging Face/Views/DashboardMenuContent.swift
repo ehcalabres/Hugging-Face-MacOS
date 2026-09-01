@@ -41,7 +41,7 @@ struct DashboardMenuContent: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            HuggingFaceIconView(size: 26)
+            HuggingFaceHeaderIconView()
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -119,6 +119,7 @@ struct DashboardMenuContent: View {
                 scheduledJobsSection
             }
             .padding(14)
+            .background(CompactScrollViewConfigurator())
         }
         .frame(minHeight: 260, maxHeight: 560)
     }
@@ -155,6 +156,7 @@ struct DashboardMenuContent: View {
                 }
             }
             .padding(14)
+            .background(CompactScrollViewConfigurator())
         }
         .frame(minHeight: 260, maxHeight: 560)
         .task(id: selectedTab) {
@@ -316,6 +318,35 @@ struct DashboardMenuContent: View {
         }
     }
 
+}
+
+private struct CompactScrollViewConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let marker = NSView(frame: .zero)
+        Self.configureScroller(from: marker)
+        return marker
+    }
+
+    func updateNSView(_ marker: NSView, context: Context) {
+        Self.configureScroller(from: marker)
+    }
+
+    private static func configureScroller(from marker: NSView) {
+        DispatchQueue.main.async { [weak marker] in
+            var ancestor = marker?.superview
+
+            while let view = ancestor {
+                if let scrollView = view as? NSScrollView {
+                    scrollView.verticalScroller?.controlSize = .small
+                    scrollView.horizontalScroller?.controlSize = .small
+                    scrollView.tile()
+                    return
+                }
+
+                ancestor = view.superview
+            }
+        }
+    }
 }
 
 private enum DashboardTab: String, CaseIterable, Identifiable {

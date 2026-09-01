@@ -1,0 +1,50 @@
+name: Release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Read version from tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use the vX.Y.Z format (for example, v0.1.0)." >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build release DMG
+        run: ./scripts/build-release.sh "$VERSION" "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/release"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          dmg="$RUNNER_TEMP/release/Hugging-Face-${VERSION}.dmg"
+          checksum="${dmg}.sha256"
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$dmg" "$checksum" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$dmg" \
+              "$checksum" \
+              --verify-tag \
+              --generate-notes \
+              --title "Hugging Face ${VERSION}"
+          fi

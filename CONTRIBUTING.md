@@ -4,7 +4,7 @@ Thanks for helping improve Hugging Face for macOS.
 
 ## Development setup
 
-The project requires macOS 26.5 or later and a compatible version of Xcode.
+The project requires macOS 14.0 or later and a compatible version of Xcode.
 
 1. Clone the repository.
 2. Open `Hugging Face MacOS.xcodeproj` in Xcode.

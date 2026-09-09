@@ -733,7 +733,7 @@ private struct JobRow: View {
                         Text("·")
                             .foregroundStyle(.tertiary)
 
-                        Text(job.createdAt, style: .relative)
+                        Text(lifecycleTimestampText)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -781,6 +781,20 @@ private struct JobRow: View {
                 )
             }
         }
+    }
+
+    private var lifecycleTimestampText: String {
+        let event: (label: String, date: Date)
+
+        if let finishedAt = job.finishedAt {
+            event = ("Finished", finishedAt)
+        } else if let startedAt = job.startedAt {
+            event = ("Started", startedAt)
+        } else {
+            event = ("Created", job.createdAt)
+        }
+
+        return "\(event.label) \(event.date.formatted(date: .abbreviated, time: .shortened))"
     }
 }
 

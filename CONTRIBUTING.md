@@ -36,7 +36,7 @@ Run the release script with a semantic version and positive build number:
 The script:
 
 1. Creates a universal Release archive for Apple Silicon and Intel Macs.
-2. Applies an ad-hoc signature while preserving the app's sandbox entitlements.
+2. Applies an ad-hoc signature with hardened runtime enabled. App Sandbox is disabled so the bundled updater can replace the installed app.
 3. Verifies the signature, architectures, version, and build number.
 4. Creates `dist/Hugging-Face-0.1.0.dmg` with an Applications shortcut.
 5. Verifies the disk image and writes a SHA-256 checksum beside it.
@@ -73,3 +73,19 @@ Pushing the tag starts `.github/workflows/release.yml`. The workflow validates t
 Current releases are ad-hoc signed because the project does not use a paid Apple Developer membership. They cannot be notarized and macOS identifies them as coming from an unidentified developer.
 
 Users may need to Control-click the installed app and choose **Open** on first launch, or allow it from **System Settings → Privacy & Security**. A future Developer ID certificate and notarization step can be added to the workflow without changing the versioning or tagging process.
+
+## Updater maintenance and validation
+
+`AppUpdateService` uses GitHub's latest stable release endpoint and compares numeric `X.Y.Z` versions. Publish both `Hugging-Face-X.Y.Z.dmg` and `Hugging-Face-X.Y.Z.dmg.sha256` under a `vX.Y.Z` tag. Drafts, prereleases, older versions, and releases without matching assets are not installed. The existing release workflow already produces these files.
+
+`Resources/install-update.sh` is bundled by Xcode and copied to a private temporary directory before execution. It downloads over HTTPS, checks SHA-256, bundle ID, version, minimum macOS version, and code-signature integrity, then stages the app on the destination volume. Only then does the running app quit. The script waits for exit, retains a backup during replacement, restores it if replacement or the `open` command fails, and relaunches. It never requests administrator privileges or removes quarantine attributes. SHA-256 and ad-hoc signature checks detect corruption; they do not provide independent publisher authentication. Developer ID signing or signed update metadata would be needed for that.
+
+Run the isolated checks (no installed app is replaced):
+
+```sh
+swiftc 'Hugging Face/Models/AppRelease.swift' tests/UpdateReleaseTests.swift -o /tmp/hf-update-release-tests
+/tmp/hf-update-release-tests
+python3 tests/test_update_installer.py
+```
+
+Before publishing, test two signed release builds from a writable Applications folder: detection, Later, manual checks, Install and Restart, preserved preferences/Keychain access, and macOS launch behavior. Installer tests stub network, disk mounting, signing, and app launching; they do not replace this end-to-end check.

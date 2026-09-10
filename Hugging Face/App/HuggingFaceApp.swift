@@ -14,6 +14,7 @@ struct HuggingFaceApp: App {
     @StateObject private var viewModel: DashboardViewModel
 
     init() {
+        HuggingFacePreferences.migrateSandboxPreferences()
         let jobsAPI = HuggingFaceJobsAPI(
             baseURL: URL(string: "https://huggingface.co")!,
             tokenProvider: { KeychainService.loadToken() },
@@ -33,6 +34,7 @@ struct HuggingFaceApp: App {
         )
         _viewModel = StateObject(wrappedValue: viewModel)
         viewModel.start()
+        AppUpdateService.shared.start()
     }
 
     var body: some Scene {

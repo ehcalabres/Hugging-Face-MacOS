@@ -12,6 +12,7 @@ import Combine
 @main
 struct HuggingFaceApp: App {
     @StateObject private var viewModel: DashboardViewModel
+    @StateObject private var bucketsViewModel = BucketsViewModel()
 
     init() {
         let jobsAPI = HuggingFaceJobsAPI(
@@ -39,6 +40,7 @@ struct HuggingFaceApp: App {
         MenuBarExtra {
             DashboardMenuContent()
                 .environmentObject(viewModel)
+                .environmentObject(bucketsViewModel)
                 .frame(width: 420)
         } label: {
             HuggingFaceMenuBarLabel()

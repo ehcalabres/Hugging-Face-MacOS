@@ -14,6 +14,15 @@ The project requires macOS 14.0 or later and a compatible version of Xcode.
 
 Before submitting a change, make sure the project builds in Xcode and avoid committing local Xcode user data, Derived Data, or generated release artifacts.
 
+Bucket parsing and folder validation can be checked without credentials or mounting anything:
+
+```sh
+xcrun swiftc 'Hugging Face/Services/BucketMountService.swift' scripts/BucketMountChecks.swift -o /tmp/hf-bucket-checks
+/tmp/hf-bucket-checks
+```
+
+For a live bucket smoke test, install hf-mount, mount a test bucket in an empty folder, open it in Finder, refresh/remount it, and unmount it. Check that a mount created in Terminal is discovered, saved mounts remain after relaunch, and a busy mount reports an error without losing its saved entry.
+
 ## Versioning
 
 The app uses Apple's standard two-part versioning:
@@ -36,7 +45,7 @@ Run the release script with a semantic version and positive build number:
 The script:
 
 1. Creates a universal Release archive for Apple Silicon and Intel Macs.
-2. Applies an ad-hoc signature with hardened runtime enabled. App Sandbox is disabled so the bundled updater can replace the installed app.
+2. Applies an ad-hoc signature with hardened runtime enabled. App Sandbox is disabled so the bundled updater can replace the installed app and hf-mount can manage filesystem mounts.
 3. Verifies the signature, architectures, version, and build number.
 4. Creates `dist/Hugging-Face-0.1.0.dmg` with an Applications shortcut.
 5. Verifies the disk image and writes a SHA-256 checksum beside it.

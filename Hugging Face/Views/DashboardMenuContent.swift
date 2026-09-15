@@ -10,6 +10,7 @@ import SwiftUI
 
 struct DashboardMenuContent: View {
     @EnvironmentObject private var vm: DashboardViewModel
+    @EnvironmentObject private var buckets: BucketsViewModel
     @State private var selectedTab: DashboardTab = .jobs
     @State private var showsAllJobs = false
 
@@ -45,7 +46,7 @@ struct DashboardMenuContent: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(selectedTab == .jobs ? "Hugging Face Jobs" : "Hugging Face Inference Endpoints")
+                Text(selectedTab == .buckets ? "Hugging Face Buckets" : selectedTab == .jobs ? "Hugging Face Jobs" : "Hugging Face Inference Endpoints")
                     .font(.headline)
 
                 Text(activitySummary)
@@ -56,7 +57,10 @@ struct DashboardMenuContent: View {
             Spacer()
 
             Button {
-                Task { await vm.refreshAll() }
+                Task {
+                    if selectedTab == .buckets { await buckets.refresh() }
+                    else { await vm.refreshAll() }
+                }
             } label: {
                 if isRefreshing {
                     ProgressView()
@@ -68,24 +72,27 @@ struct DashboardMenuContent: View {
                 }
             }
             .buttonStyle(.borderless)
-            .help("Refresh Jobs, Endpoints, and usage")
+            .help(selectedTab == .buckets ? "Refresh mounted buckets" : "Refresh Jobs, Endpoints, and usage")
             .keyboardShortcut("r", modifiers: .command)
             .disabled(isRefreshing)
 
             Button {
-                NSWorkspace.shared.open(selectedTab == .jobs ? vm.jobsPageURL : vm.endpointsPageURL)
+                if selectedTab == .buckets { buckets.showsMountForm.toggle() }
+                else { NSWorkspace.shared.open(selectedTab == .jobs ? vm.jobsPageURL : vm.endpointsPageURL) }
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 16, height: 16)
             }
             .buttonStyle(.borderless)
-            .help(selectedTab == .jobs ? "Create a Job on Hugging Face" : "Deploy Endpoint on Hugging Face")
+            .help(selectedTab == .buckets ? "Mount bucket" : selectedTab == .jobs ? "Create a Job on Hugging Face" : "Deploy Endpoint on Hugging Face")
+            .disabled(selectedTab == .buckets && (!buckets.toolAvailable || buckets.isBusy))
             .keyboardShortcut("n", modifiers: .command)
 
         }
     }
 
     private var activitySummary: String {
+        if selectedTab == .buckets { return "\(buckets.running.count) mounted buckets" }
         guard selectedTab == .jobs else {
             return vm.endpoints.count == 1 ? "1 endpoint" : "\(vm.endpoints.count) endpoints"
         }
@@ -96,7 +103,9 @@ struct DashboardMenuContent: View {
 
     @ViewBuilder
     private var dashboardContent: some View {
-        if selectedTab == .jobs {
+        if selectedTab == .buckets {
+            BucketsView(model: buckets)
+        } else if selectedTab == .jobs {
             jobsContent
         } else {
             endpointsContent
@@ -166,7 +175,7 @@ struct DashboardMenuContent: View {
     }
 
     private var isRefreshing: Bool {
-        vm.isRefreshing || vm.isRefreshingEndpoints || vm.isRefreshingUsage
+        selectedTab == .buckets ? buckets.isBusy : vm.isRefreshing || vm.isRefreshingEndpoints || vm.isRefreshingUsage
     }
 
     private var activeJobsSection: some View {
@@ -266,7 +275,11 @@ struct DashboardMenuContent: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if let nextRefreshDate = vm.nextRefreshDate {
+            if selectedTab == .buckets {
+                Text("Mount status refreshes every 15s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let nextRefreshDate = vm.nextRefreshDate {
                 Label {
                     Text(nextRefreshDate, style: .relative)
                 } icon: {
@@ -289,13 +302,13 @@ struct DashboardMenuContent: View {
 
             Button {
                 NSWorkspace.shared.open(
-                    selectedTab == .jobs ? vm.jobsPageURL : vm.endpointsPageURL
+                    selectedTab == .buckets ? URL(string: "https://huggingface.co/buckets")! : selectedTab == .jobs ? vm.jobsPageURL : vm.endpointsPageURL
                 )
             } label: {
                 Image(systemName: "arrow.up.right.square")
             }
             .buttonStyle(.borderless)
-            .help(selectedTab == .jobs ? "Open Hugging Face Jobs" : "Open Inference Endpoints")
+            .help(selectedTab == .buckets ? "Open Hugging Face Buckets" : selectedTab == .jobs ? "Open Hugging Face Jobs" : "Open Inference Endpoints")
             .keyboardShortcut("o", modifiers: .command)
 
             Button {
@@ -352,6 +365,7 @@ private struct CompactScrollViewConfigurator: NSViewRepresentable {
 private enum DashboardTab: String, CaseIterable, Identifiable {
     case jobs
     case endpoints
+    case buckets
 
     var id: Self { self }
 
@@ -359,6 +373,7 @@ private enum DashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .jobs: "Jobs"
         case .endpoints: "Endpoints"
+        case .buckets: "Buckets"
         }
     }
 
@@ -366,6 +381,7 @@ private enum DashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .jobs: "briefcase"
         case .endpoints: "point.3.connected.trianglepath.dotted"
+        case .buckets: "externaldrive"
         }
     }
 
@@ -373,6 +389,7 @@ private enum DashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .jobs: "1"
         case .endpoints: "2"
+        case .buckets: "3"
         }
     }
 }

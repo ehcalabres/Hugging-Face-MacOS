@@ -1,6 +1,23 @@
 import Foundation
 
 enum HuggingFacePreferences {
+    // Direct-download releases no longer use App Sandbox. Import existing settings once.
+    static func migrateSandboxPreferences() {
+        let defaults = UserDefaults.standard
+        let marker = "didMigrateSandboxPreferences"
+        guard !defaults.bool(forKey: marker), let identifier = Bundle.main.bundleIdentifier else { return }
+        let oldURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/\(identifier)/Data/Library/Preferences/\(identifier).plist")
+        if let data = try? Data(contentsOf: oldURL),
+           let values = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+            let existing = defaults.persistentDomain(forName: identifier) ?? [:]
+            for (key, value) in values where existing[key] == nil {
+                defaults.set(value, forKey: key)
+            }
+        }
+        defaults.set(true, forKey: marker)
+    }
+
     static let namespaceKey = "jobsNamespace"
     static let showActiveCountKey = "showActiveJobCount"
     static let notificationsEnabledKey = "stateChangeNotificationsEnabled"

@@ -35,6 +35,7 @@ private struct SettingRow<Control: View>: View {
 
 struct PreferencesView: View {
     @EnvironmentObject private var vm: DashboardViewModel
+    @ObservedObject private var updater = AppUpdateService.shared
     @AppStorage(HuggingFacePreferences.namespaceKey) private var namespace = ""
     @AppStorage(HuggingFacePreferences.showActiveCountKey) private var showActiveCount = true
     @AppStorage(HuggingFacePreferences.notificationsEnabledKey) private var notificationsEnabled = true
@@ -232,13 +233,33 @@ struct PreferencesView: View {
             }
 
             Section {
+                SettingRow(title: "Software updates", description: "Check GitHub Releases for new app versions.") {
+                    Picker("Check for updates", selection: $updater.intervalHours) {
+                        Text("Manually").tag(0)
+                        Text("Every 6 hours").tag(6)
+                        Text("Every 12 hours").tag(12)
+                        Text("Every day").tag(24)
+                        Text("Every 2 days").tag(48)
+                        Text("Every week").tag(168)
+                    }
+                    .labelsHidden()
+                    .frame(width: 145)
+                }
+                SettingRow(title: "Latest version", description: updateCheckDescription) {
+                    Button(updater.isChecking ? "Checking…" : "Check Now") {
+                        Task { await updater.check(manual: true) }
+                    }
+                    .disabled(updater.isChecking || updater.isInstalling)
+                }
+            }
+
+            Section {
                 footer
                     .listRowBackground(Color.clear)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 620)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 620, height: 680)
         .onAppear {
             poll = nearestPollingOption(to: vm.pollInterval)
             jobsPerSection = vm.displayLimit
@@ -275,6 +296,11 @@ struct PreferencesView: View {
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
+    }
+
+    private var updateCheckDescription: String {
+        guard let date = updater.lastCheck else { return "Updates install only when you choose Install and Restart." }
+        return "Last checked \(date.formatted(date: .abbreviated, time: .shortened))."
     }
 
     private var displayLimitOptions: [Int] {
